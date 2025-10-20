@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>Camera Protractor – Upper Arc (0° at Left)</title>
+<style>
+  :root { --ui-bg: rgba(0,0,0,0.55); --ui-fg: #fff; --accent: #00e5ff; --accent-2: #ffd400; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+  #video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #controls {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 10px;
+    display: grid; grid-auto-flow: column; gap: 10px; align-items: center;
+    padding: 8px 10px; background: var(--ui-bg); color: var(--ui-fg);
+    border-radius: 14px; backdrop-filter: blur(6px);
+  }
+  .btn, select {
+    appearance: none; border: 0; background: #111; color: var(--ui-fg);
+    padding: 8px 10px; border-radius: 10px; font-size: 14px;
+  }
+  .btn:active { transform: scale(0.98); }
+  .row { display: grid; grid-auto-flow: column; gap: 8px; align-items: center; }
+  .lbl { font-size: 12px; opacity: 0.9; }
+  input[type="range"] { width: 110px; }
+  #status {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    background: var(--ui-bg); color: var(--ui-fg); padding: 6px 10px; border-radius: 10px; font-size: 12px;
+    max-width: 90vw; text-align: center;
+  }
+</style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+
+  <div id="status">Tap <b>Start Camera</b> to grant permission.</div>
+
+  <div id="controls">
+    <button class="btn" id="startBtn">Start Camera</button>
+    <select id="deviceSelect" title="Camera"></select>
+    <button class="btn" id="flipBtn" title="Flip camera">Flip</button>
+    <div class="row">
+      <span class="lbl">Rotate</span>
+      <input id="rot" type="range" min="0" max="180" value="0" step="1" />
+    </div>
+    <div class="row">
+      <span class="lbl">Size</span>
+      <input id="scale" type="range" min="40" max="120" value="80" step="1" />
+    </div>
+    <div class="row">
+      <span class="lbl">Opacity</span>
+      <input id="alpha" type="range" min="20" max="100" value="85" step="1" />
+    </div>
+    <button class="btn" id="lockBtn">Lock</button>
+    <button class="btn" id="zeroBtn">Zero</button>
+  </div>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('overlay');
+const ctx = canvas.getContext('2d', { alpha: true });
+
+const startBtn = document.getElementById('startBtn');
+const deviceSelect = document.getElementById('deviceSelect');
+const flipBtn = document.getElementById('flipBtn');
+const rot = document.getElementById('rot');
+const scale = document.getElementById('scale');
+const alpha = document.getElementById('alpha');
+const zeroBtn = document.getElementById('zeroBtn');
+const lockBtn = document.getElementById('lockBtn');
+const statusEl = document.getElementById('status');
+
+let angleDeg = 0;      // 0 at far left, 90 at top, 180 at far right
+let scalePct = 80;
+let opacityPct = 85;
+let locked = false;
+let devices = [];
+let currentIndex = 0;
+let currentDeviceId = null;
+
+function setStatus(msg) { statusEl.innerHTML = msg; }
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  draw();
+}
+window.addEventListener('resize', resize);
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width, canvas.height);
+  const radius = Math.min(canvas.width, canvas.height) * (scalePct / 200);
+  const margin = Math.min(80, canvas.height * 0.08);
+  const cx = canvas.width / 2;
+  const cy = radius + margin; // upper hemisphere
+
+  ctx.save();
+  ctx.globalAlpha = opacityPct / 100;
+
+  // Upper semicircle arc (left -> up -> right)
+  ctx.strokeStyle = 'rgba(0, 229, 255, 0.95)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, Math.PI, 2*Math.PI, true);
+  ctx.stroke();
+
+  // Ticks & labels: 0..180 mapped to PI..2PI
+  ctx.font = Math.max(10, radius * 0.08) + 'px system-ui';
+  ctx.fillStyle = '#00e5ff';
+  for (let d = 0; d <= 180; d += 10) {
+    const rad = Math.PI + (d * Math.PI/180);
+    const inner = radius * 0.88;
+    const outer = radius;
+    const ix = cx + inner * Math.cos(rad);
+    const iy = cy + inner * Math.sin(rad);
+    const ox = cx + outer * Math.cos(rad);
+    const oy = cy + outer * Math.sin(rad);
+
+    ctx.lineWidth = (d % 30 === 0) ? 2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(ix, iy);
+    ctx.lineTo(ox, oy);
+    ctx.stroke();
+
+    if (d % 30 === 0) {
+      const tx = cx + (inner - radius*0.12) * Math.cos(rad);
+      const ty = cy + (inner - radius*0.12) * Math.sin(rad);
+      const text = String(d);
+      const metrics = ctx.measureText(text);
+      ctx.fillText(text, tx - metrics.width/2, ty - 4);
+    }
+  }
+
+  // Measuring arm from 0° (left)
+  const a = Math.PI + (angleDeg * Math.PI/180);
+  ctx.strokeStyle = '#ffd400';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + radius * Math.cos(a), cy + radius * Math.sin(a));
+  ctx.stroke();
+
+  // Angle badge
+  const badgeW = 90, badgeH = 34;
+  const bx = cx - badgeW/2, by = cy + 10;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(bx, by, badgeW, badgeH);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx, by, badgeW, badgeH);
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px system-ui';
+  const txt = Math.round(angleDeg) + '°';
+  const tw = ctx.measureText(txt).width;
+  ctx.fillText(txt, cx - tw/2, by + 22);
+
+  ctx.restore();
+}
+
+function setAngleFromPoint(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const radius = Math.min(canvas.width, canvas.height) * (scalePct / 200);
+  const margin = Math.min(80, canvas.height * 0.08);
+  const cx = canvas.width / 2;
+  const cy = radius + margin;
+
+  const rad = Math.atan2(y - cy, x - cx);
+  let deg = (rad - Math.PI) * 180/Math.PI; // left=0
+  deg = (deg % 360 + 360) % 360;
+  if (deg > 180) deg = 180;
+  angleDeg = deg;
+  draw();
+}
+
+let dragging = false;
+canvas.addEventListener('pointerdown', (e) => { if (!locked){ dragging = true; setAngleFromPoint(e.clientX, e.clientY);} });
+canvas.addEventListener('pointermove', (e) => { if (!locked && dragging){ setAngleFromPoint(e.clientX, e.clientY);} });
+['pointerup','pointercancel','pointerleave'].forEach(ev => canvas.addEventListener(ev, () => dragging = false));
+
+rot.addEventListener('input', () => { angleDeg = parseInt(rot.value, 10); draw(); });
+scale.addEventListener('input', () => { scalePct = parseInt(scale.value, 10); draw(); });
+alpha.addEventListener('input', () => { opacityPct = parseInt(alpha.value, 10); draw(); });
+zeroBtn.addEventListener('click', () => { angleDeg = 0; rot.value = 0; draw(); });
+lockBtn.addEventListener('click', () => { locked = !locked; lockBtn.textContent = locked ? 'Unlock' : 'Lock'; });
+
+async function listDevices() {
+  const all = await navigator.mediaDevices.enumerateDevices();
+  devices = all.filter(d => d.kind === 'videoinput');
+  deviceSelect.innerHTML = '';
+  devices.forEach((d, i) => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    const label = d.label || `Camera ${i+1}`;
+    opt.textContent = label;
+    deviceSelect.appendChild(opt);
+  });
+  if (devices.length > 0) {
+    currentIndex = 0;
+    currentDeviceId = devices[0].deviceId;
+    deviceSelect.value = currentDeviceId;
+  }
+}
+
+async function startWithDevice(deviceId) {
+  try {
+    if (video.srcObject) { for (const t of video.srcObject.getTracks()) t.stop(); }
+    const constraints = {
+      audio: false,
+      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play().catch(()=>{});
+    setStatus('Camera running.');
+  } catch (err) {
+    setStatus('Camera failed: ' + err.message + '<br>Tip: Use HTTPS (GitHub Pages) and allow camera.');
+  }
+}
+
+startBtn.addEventListener('click', async () => {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    for (const t of s.getTracks()) t.stop();
+    await listDevices();
+    await startWithDevice(currentDeviceId);
+  } catch (err) {
+    setStatus('Permission error: ' + err.message + '<br>Tip: In Chrome, tap the lock icon → Site settings → Allow Camera.');
+  }
+});
+
+deviceSelect.addEventListener('change', async () => {
+  currentDeviceId = deviceSelect.value;
+  await startWithDevice(currentDeviceId);
+});
+
+flipBtn.addEventListener('click', async () => {
+  if (devices.length <= 1) { setStatus('Only one camera detected.'); return; }
+  currentIndex = (currentIndex + 1) % devices.length;
+  currentDeviceId = devices[currentIndex].deviceId;
+  deviceSelect.value = currentDeviceId;
+  await startWithDevice(currentDeviceId);
+});
+
+document.addEventListener('visibilitychange', async () => {
+  if (!document.hidden && currentDeviceId) { await startWithDevice(currentDeviceId); }
+});
+
+resize();
+draw();
+</script>
+</body>
+</html>
